@@ -1,0 +1,287 @@
+---
+
+- name: Update and install basic packages on all hosts
+  hosts: all
+  become: yes
+  become_method: sudo
+  become_user: root
+  tasks:
+
+    - name: Update OS package list
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install common packages
+      apt:
+        name: [bind9-dnsutils, tcpdump, nmap, mysql-client]
+        state: present
+
+    
+- name: Configure Database Server
+  hosts: database
+  become: true
+  become_method: sudo
+  become_user: root
+  vars:
+    mysql_root_password: "Password"
+    mysql_bind_address: "*"
+    db_name: "backend"
+    db_user: "appdb"
+    db_password: "Password"
+
+  tasks:
+    - name: Install MySQL server and python3-pymysql
+      ansible.builtin.apt:
+        name:
+          - mysql-server
+          - python3-pymysql
+        state: present
+
+    - name: Configure MySQL to listen on private IP
+      ansible.builtin.lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = {{ mysql_bind_address }}'
+        state: present
+      notify: restart mysql
+
+    - name: Start and enable MySQL service
+      ansible.builtin.service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: Remove anonymous user accounts
+      community.mysql.mysql_user:
+        user: ""
+        host_all: yes
+        state: absent
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        check_implicit_admin: true
+        
+
+    - name: Remove test database
+      community.mysql.mysql_db:
+        name: test
+        state: absent
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        check_implicit_admin: true
+
+    - name: Create application database
+      community.mysql.mysql_db:
+        name: "{{ db_name }}"
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        check_implicit_admin: true
+
+      
+    - name: Create application user & grant all priviledges
+      community.mysql.mysql_user:
+        name: "{{ db_user }}"
+        host: "%"
+        priv: "{{ db_name }}.*:ALL"
+        password: "{{ db_password }}"
+        state: present
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        check_implicit_admin: true
+
+    - name: Create table for the app & insert data
+      community.mysql.mysql_query:
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_user: "{{ db_user }}"
+        login_password: "{{ db_password }}"
+        query: 
+          - USE {{ db_name }};
+          - CREATE TABLE IF NOT EXISTS item (name varchar(30) NOT NULL, bcit_id varchar(10) NOT NULL, PRIMARY KEY (bcit_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+          - INSERT IGNORE INTO item (name, bcit_id) VALUES ('Zabir Ahasan', 'A01077201');
+    
+    - name: Remove remote root
+      community.mysql.mysql_user:
+        name: root
+        host: '%'
+        state: absent
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+        check_implicit_admin: true
+
+    - name: Set Root Password
+      community.mysql.mysql_user:
+        name: root 
+        host_all: yes
+        password: "{{ mysql_root_password }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_user: root 
+        login_password: "{{ mysql_root_password }}"
+        check_implicit_admin: true
+
+  handlers:
+    - name: restart mysql
+      ansible.builtin.service:
+        name: mysql
+        state: restarted
+
+- name: Config Backend Application Server
+  hosts: backend
+  vars_files:
+    - ./group_vars/group_variables.yml
+  vars:
+    description: "Backend Service"
+    working_directory: "/home/backend/backend"
+    service_user: "backend"
+    exec_start: "/home/backend/.local/bin/gunicorn wsgi:app -b 0.0.0.0:5000 --timeout 120"
+
+  tasks:
+    - name: Install packages for backend server
+      ansible.builtin.apt:
+        name:
+          - git
+          - libmysqlclient-dev
+          - pkg-config
+          - python3-dev
+          - python3-pip
+        state: present
+      become: true
+
+    - name: Create group for application
+      ansible.builtin.group:
+        name: "backend"
+        state: present
+      become: true
+
+    - name: Create OS user for application
+      ansible.builtin.user:
+        name: "backend"
+        system: yes
+        group: "backend"
+        shell: "/bin/bash"
+        create_home: yes
+        home: "/home/backend"
+        state: present
+      become: true
+
+    - name: Clone application repository
+      ansible.builtin.git:
+        repo: https://github.com/timoguic/acit4640-py-mysql.git
+        dest: '/backend/src'
+        clone: yes
+        version: master
+      become: true
+
+    - name: Copy the backend directory to the desired location
+      ansible.builtin.copy:
+        src: /backend/src/backend
+        dest: /home/backend
+        owner: "backend"
+        group: "backend"
+        mode: "0755"
+        remote_src: yes
+      become: true
+
+    - name: Ensure backend user owns the backend directory
+      ansible.builtin.file:
+        path: "/home/backend"
+        state: directory
+        owner: backend
+        group: backend
+        mode: '0755'
+        recurse: yes
+      become: true
+
+    - name: Pip install requirements
+      become: true
+      environment:
+        HOME: "/home/backend"
+      ansible.builtin.pip:
+        executable: pip3
+        requirements: /home/backend/backend/requirements.txt
+        extra_args: "--user --break-system-packages"
+      
+
+    - name: Copy over backend conf file
+      ansible.builtin.template:
+        src: backend.conf.j2
+        dest: /home/backend/backend/backend.conf
+      become: true
+
+    - name: Create systemd service file
+      ansible.builtin.template:
+        src: backend.service.j2
+        dest: /etc/systemd/system/backend.service
+      notify: reload & restart
+      become: true
+    
+    - name: Enable & start service
+      ansible.builtin.systemd:
+        name: backend.service
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      become: true
+
+  handlers:
+    - name: reload & restart
+      ansible.builtin.systemd:
+        name: backend.service
+        state: restarted
+        daemon_reload: yes
+      become: true
+        
+- name: Configure Webserver
+  hosts: webserver
+  become: true 
+  vars_files:
+    - ./group_vars/group_variables.yml
+
+  tasks:
+    - name: Install Nginx & Git
+      ansible.builtin.package:
+        name: 
+          - nginx
+          - git
+        state: latest
+
+    - name: Create web root dir
+      ansible.builtin.file:
+        path: /var/www/web_root
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0775"
+
+    - name: Configure Nginx
+      ansible.builtin.template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/sites-available/default
+      notify: restart nginx
+
+    - name: Clone repository on webserver
+      ansible.builtin.git:
+        repo: https://github.com/timoguic/acit4640-py-mysql.git
+        dest: /home/ubuntu/frontend
+        clone: yes
+        update: yes
+    
+    - name: Copy to web root location
+      ansible.builtin.copy:
+        src: /home/ubuntu/frontend/frontend/
+        dest: /var/www/web_root/
+        owner: www-data
+        group: www-data
+        mode: "0775"
+        remote_src: yes
+
+  handlers:
+    - name: restart nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+        enabled: yes

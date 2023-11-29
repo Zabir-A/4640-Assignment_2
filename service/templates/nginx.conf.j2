@@ -1,0 +1,13 @@
+server {
+    listen 80;
+    server_name _;
+    root /var/www/web_root;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+    location /json {
+        proxy_pass http://{{ backend_ec2_public_dns }}:5000;
+    }
+}
