@@ -1,4 +1,4 @@
-# Assignment 2 
+# Assignment 2 - ACIT 4640 (BCIT)
 
 ### Project Overview
 The goal of this Assignment is to provision an infrastructure and deploy a web application across different EC2 Server instances, using AWS, Terraform and Ansible.  
