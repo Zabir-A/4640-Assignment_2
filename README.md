@@ -157,7 +157,7 @@ https://docs.ansible.com/ansible/latest/command_guide/cheatsheet.html
     ![Alt text](ansible_playbook.png)
 
 ## 3. Access the Web Application
-- Retrieve the web_instance_public_dns value from the `inventory\inventory.yml` file
+- Retrieve the webserver host's DNS address from the `inventory\inventory.yml` file
 
     ![Alt text](inventory.png)
     
