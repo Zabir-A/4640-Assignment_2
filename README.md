@@ -89,10 +89,6 @@ Running the playbook requires `ansible.cfg` file to be configured for ssh connec
     - home_net = "Your Home IP Address/32"
     - ssh_key_name = ~/.ssh/your_ssh_key
 
-    2. `ansible.cf`:
-    
-    - private_key_file = '/SSH KEY PATH'
-
 ## Assignment Files & Directory Content:
 
 - `infrastructure` directory:
